@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRO CUT STUDIO - AI Video Editor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { font-family: 'Inter', sans-serif; box-sizing: border-box; }
+body { margin: 0; background: #0a0a0f; color: #fff; overflow: hidden; user-select: none; }
+.glass { background: rgba(20, 20, 35, 0.95); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.05); }
+.accent-gradient { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.ai-gradient { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+.tool-btn { transition: all 0.2s ease; }
+.tool-btn:hover { transform: translateY(-2px); }
+.tool-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.range-slider { -webkit-appearance: none; height: 6px; border-radius: 3px; background: #2d2d44; outline: none; width: 100%; }
+.range-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #667eea; cursor: pointer; }
+.overlay-element { position: absolute; cursor: move; padding: 6px 12px; border-radius: 6px; font-weight: 600; z-index: 10; border: 2px solid transparent; }
+.overlay-element.selected { border-color: #667eea; }
+.text-overlay { background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); }
+.sticker-overlay { font-size: 40px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.5)); background: transparent !important; border: none !important; }
+.video-wrapper { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 12px; overflow: hidden; }
+#previewVideo { max-width: 100%; max-height: 100%; cursor: grab; }
+#previewVideo:active { cursor: grabbing; }
+#overlaysLayer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+#overlaysLayer > * { pointer-events: all; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ef4444; z-index: 50; pointer-events: none; }
+.scan-line { position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #00ff88, transparent); animation: scan 2s linear infinite; opacity: 0; }
+@keyframes scan { 0% { top: 0; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+.ai-processing { position: absolute; inset: 0; background: rgba(0,255,136,0.1); border: 2px solid #00ff88; border-radius: 12px; opacity: 0; }
+.ai-processing.active { opacity: 1; }
+.ai-processing.active .scan-line { opacity: 1; }
+.modal-overlay { background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); }
+.clip-item { background: linear-gradient(135deg, #2d2d44 0%, #252538 100%); transition: all 0.2s; cursor: pointer; position: relative; overflow: hidden; }
+.clip-item:hover { transform: translateY(-2px); }
+.clip-item.active { border: 2px solid #667eea; box-shadow: 0 0 20px rgba(102, 126, 234, 0.4); }
+
+/* Progress bar animation */
+.progress-bar-animated {
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #667eea 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Download button pulse */
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7); }
+  50% { box-shadow: 0 0 0 10px rgba(102, 126, 234, 0); }
+}
+.download-btn {
+  animation: pulse 2s infinite;
+  cursor: pointer;
+}
+.download-btn:active {
+  transform: scale(0.95);
+}
+
+/* Preview video styling */
+#finalVideoPreview {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 8px;
+  margin: 10px 0;
+}
+</style>
+</head>
+<body class="h-screen flex flex-col">
+
+<!-- Top Bar -->
+<div class="glass h-12 flex items-center justify-between px-4 z-50 shrink-0">
+  <div class="flex items-center gap-2">
+    <div class="w-7 h-7 accent-gradient rounded-lg flex items-center justify-center font-bold text-sm">P</div>
+    <span class="font-bold text-base">PRO CUT STUDIO</span>
+    <span class="text-[10px] text-gray-400 ml-2 px-2 py-0.5 bg-white/5 rounded-full">AI v6.0</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <button onclick="showTemplates()" class="tool-btn px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-medium">📋 Templates</button>
+    <button onclick="startExport()" id="exportBtn" class="tool-btn accent-gradient px-4 py-1.5 rounded-lg font-semibold text-xs shadow-lg disabled:opacity-50" disabled>⬇ Export</button>
+  </div>
+</div>
+
+<div class="flex flex-1 overflow-hidden">
+  
+  <!-- Left Sidebar -->
+  <div class="w-56 glass flex flex-col border-r border-white/5 shrink-0">
+    <div class="p-3 border-b border-white/5">
+      <button onclick="openUpload()" class="w-full accent-gradient py-2.5 rounded-xl font-semibold text-xs shadow-lg mb-2">📁 Import Media</button>
+      <input type="file" id="fileInput" accept="video/*,image/*,audio/*" multiple class="hidden">
+      <button onclick="showAIEdit()" class="w-full ai-gradient py-2.5 rounded-xl font-semibold text-xs shadow-lg text-white">🤖 AI Auto Edit</button>
+    </div>
+    
+    <nav class="flex-1 px-2 py-2 space-y-0.5">
+      <button onclick="switchTab('media')" id="tab-media" class="nav-btn w-full text-left px-3 py-2 rounded-xl bg-white/10 text-white text-xs font-medium">🎬 Media</button>
+      <button onclick="switchTab('edit')" id="tab-edit" class="nav-btn w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-gray-300 text-xs font-medium">✂️ Edit</button>
+      <button onclick="switchTab('ai')" id="tab-ai" class="nav-btn w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-gray-300 text-xs font-medium">🤖 AI Tools</button>
+      <button onclick="switchTab('text')" id="tab-text" class="nav-btn w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-gray-300 text-xs font-medium">📝 Text</button>
+      <button onclick="switchTab('move')" id="tab-move" class="nav-btn w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-gray-300 text-xs font-medium">🖱️ Move Mode</button>
+    </nav>
+    
+    <div class="p-3 border-t border-white/5 text-[10px] text-gray-500 space-y-1">
+      <div class="flex justify-between"><span>Clips:</span> <span id="stat-clips" class="text-white">0</span></div>
+      <div class="flex justify-between"><span>Duration:</span> <span id="stat-duration" class="text-white">0:00</span></div>
+    </div>
+  </div>
+
+  <!-- Main Workspace -->
+  <div class="flex-1 flex flex-col bg-[#0a0a0f] relative min-w-0">
+    
+    <!-- Preview Area -->
+    <div class="flex-1 flex items-center justify-center p-4 relative overflow-hidden" id="workspace">
+      <div class="absolute inset-0 opacity-20 pointer-events-none" style="background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.1) 1px, transparent 0); background-size: 40px 40px;"></div>
+      
+      <div id="emptyState" class="text-center z-10 flex flex-col items-center">
+        <div class="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-600/20 to-purple-600/20 flex items-center justify-center mb-4 text-4xl border border-white/10">🎬</div>
+        <h2 class="text-2xl font-bold mb-2">Start Creating</h2>
+        <p class="text-gray-400 mb-6 text-sm">Import media or use AI Auto Edit</p>
+        <div class="flex gap-2">
+          <button onclick="openUpload()" class="accent-gradient px-6 py-2.5 rounded-xl font-semibold text-sm shadow-lg">📁 Import</button>
+          <button onclick="showAIEdit()" class="ai-gradient px-6 py-2.5 rounded-xl font-semibold text-sm shadow-lg text-white">🤖 AI Edit</button>
+        </div>
+      </div>
+
+      <div id="previewContainer" class="video-wrapper hidden shadow-2xl max-w-4xl max-h-[60vh] aspect-video relative">
+        <div class="ai-processing" id="aiProcessing">
+          <div class="scan-line"></div>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <div class="bg-black/80 px-4 py-2 rounded-lg text-[#00ff88] font-mono text-sm font-bold">AI PROCESSING...</div>
+          </div>
+        </div>
+        <video id="previewVideo" class="w-full h-full object-contain" playsinline></video>
+        <canvas id="previewCanvas" class="hidden absolute inset-0 w-full h-full"></canvas>
+        <div id="overlaysLayer"></div>
+        <div id="bigPlayBtn" onclick="togglePlay()" class="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
+          <div class="w-16 h-16 rounded-full accent-gradient flex items-center justify-center text-2xl shadow-2xl" id="bigPlayIcon">▶</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toolbarPanel" class="glass h-16 border-t border-white/5 px-4 flex items-center gap-2 overflow-x-auto shrink-0 hidden"></div>
+
+    <!-- Timeline -->
+    <div class="h-40 glass border-t border-white/5 flex flex-col shrink-0">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-white/5 bg-black/20">
+        <div class="flex items-center gap-3">
+          <button onclick="togglePlay()" id="playPauseBtn" class="w-10 h-10 rounded-full accent-gradient flex items-center justify-center text-lg shadow-lg disabled:opacity-50" disabled>▶</button>
+          <button onclick="stopVideo()" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-sm">⏹</button>
+          <div class="font-mono text-sm" id="timeDisplay">00:00 / 00:00</div>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-1.5 bg-black/30 rounded-lg px-2 py-1">
+            <button onclick="toggleMute()" id="muteBtn" class="p-1 text-xs">🔊</button>
+            <input type="range" min="0" max="100" value="100" class="w-16 range-slider" oninput="setVolume(this.value/100)">
+          </div>
+          <div class="flex items-center gap-1">
+            <button onclick="zoomTimeline(-0.2)" class="w-6 h-6 rounded bg-white/5 text-xs">-</button>
+            <span class="text-[10px] text-gray-500 w-10 text-center" id="zoomLevel">100%</span>
+            <button onclick="zoomTimeline(0.2)" class="w-6 h-6 rounded bg-white/5 text-xs">+</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="flex-1 overflow-x-auto relative bg-gradient-to-r from-[#1a1a2e] to-[#252542]" id="timelineContainer">
+        <div class="absolute top-0 left-0 right-0 h-5 bg-black/40 border-b border-white/5 flex items-center px-2 text-[10px] text-gray-500" id="timeRuler"></div>
+        <div class="flex gap-1 p-2 pt-6 min-w-full h-full items-start" id="timelineTracks"></div>
+        <div class="playhead" id="playhead" style="left: 8px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Properties Panel -->
+  <div class="w-60 glass border-l border-white/5 flex flex-col shrink-0">
+    <div class="p-3 border-b border-white/5 font-semibold text-xs flex justify-between">
+      <span>Properties</span>
+      <button onclick="resetClip()" class="text-[10px] text-red-400 hover:text-red-300">Reset</button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-3" id="propertiesContent">
+      <div class="text-center py-8 text-gray-500">
+        <div class="text-3xl mb-2">📋</div>
+        <p class="text-xs">Select a clip</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AI Edit Modal -->
+<div id="aiEditModal" class="fixed inset-0 modal-overlay z-[100] hidden flex items-center justify-center p-4">
+  <div class="glass rounded-2xl w-full max-w-2xl p-6">
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h2 class="text-2xl font-bold ai-gradient bg-clip-text text-transparent">🤖 AI Auto Edit</h2>
+        <p class="text-xs text-gray-400 mt-1">AI will analyze and enhance your content</p>
+      </div>
+      <button onclick="closeAIEdit()" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center">×</button>
+    </div>
+    
+    <div class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white/5 rounded-xl p-4 cursor-pointer hover:bg-white/10 transition-colors" onclick="startAIEdit('cinematic')">
+        <div class="text-3xl mb-2">🎬</div>
+        <h3 class="font-bold text-sm mb-1">Cinematic</h3>
+        <p class="text-[10px] text-gray-400">Color grade, smooth transitions</p>
+      </div>
+      <div class="bg-white/5 rounded-xl p-4 cursor-pointer hover:bg-white/10 transition-colors" onclick="startAIEdit('vlog')">
+        <div class="text-3xl mb-2">📹</div>
+        <h3 class="font-bold text-sm mb-1">Vlog Style</h3>
+        <p class="text-[10px] text-gray-400">Dynamic cuts, zooms</p>
+      </div>
+      <div class="bg-white/5 rounded-xl p-4 cursor-pointer hover:bg-white/10 transition-colors" onclick="startAIEdit('social')">
+        <div class="text-3xl mb-2">📱</div>
+        <h3 class="font-bold text-sm mb-1">Social Media</h3>
+        <p class="text-[10px] text-gray-400">Vertical, captions, viral</p>
+      </div>
+      <div class="bg-white/5 rounded-xl p-4 cursor-pointer hover:bg-white/10 transition-colors" onclick="startAIEdit('professional')">
+        <div class="text-3xl mb-2">💼</div>
+        <h3 class="font-bold text-sm mb-1">Professional</h3>
+        <p class="text-[10px] text-gray-400">Clean, subtle, corporate</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Export Modal - FIXED WITH SAVE TO PHOTOS OPTION -->
+<div id="exportModal" class="fixed inset-0 modal-overlay z-[100] hidden flex items-center justify-center p-4">
+  <div class="glass rounded-2xl w-full max-w-md p-6 text-center max-h-[90vh] overflow-y-auto">
+    <div class="w-14 h-14 rounded-full accent-gradient flex items-center justify-center text-2xl mx-auto mb-3" id="exportIcon">⏳</div>
+    <h3 class="text-lg font-bold mb-1" id="exportTitle">Exporting...</h3>
+    <p class="text-xs text-gray-400 mb-3" id="exportStatus">Initializing...</p>
+    <div class="w-full bg-white/10 rounded-full h-2 overflow-hidden mb-2">
+      <div id="exportProgress" class="h-full accent-gradient progress-bar-animated transition-all duration-100" style="width: 0%"></div>
+    </div>
+    <div class="flex justify-between text-[10px] text-gray-500 mb-4">
+      <span id="exportPercent">0%</span>
+      <span id="exportTimeRemaining">Calculating...</span>
+    </div>
+    <div class="text-[10px] text-gray-600 mb-4" id="exportDetails">Clip 0/0 • Frame 0</div>
+    
+    <!-- Download Section - Hidden until complete -->
+    <div id="downloadSection" class="hidden mb-4 text-left">
+      <p class="text-xs text-green-400 mb-2 font-bold text-center">✅ Export Complete!</p>
+      
+      <!-- Video Preview -->
+      <video id="finalVideoPreview" controls class="w-full bg-black/50 mb-3" style="display:none;"></video>
+      
+      <!-- Primary Download Button -->
+      <button onclick="downloadVideo()" class="download-btn w-full accent-gradient px-4 py-3 rounded-xl font-bold text-sm mb-3 text-white border-0">
+        📥 SAVE TO DEVICE
+      </button>
+      
+      <!-- Alternative Options -->
+      <div class="space-y-2">
+        <button onclick="shareVideo()" id="shareBtn" class="w-full bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-xs font-medium text-white hidden">
+          📤 Share / Save to Photos
+        </button>
+        
+        <button onclick="openVideoInNewTab()" class="w-full bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-xs text-gray-300">
+          🔗 Open Video in New Tab
+        </button>
+      </div>
+      
+      <div class="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+        <p class="text-[10px] text-yellow-200 font-bold mb-1">📱 iPhone/Android Users:</p>
+        <p class="text-[10px] text-gray-400">
+          If the download doesn't appear in Photos:<br>
+          1. Tap "Open Video in New Tab"<br>
+          2. Press and hold the video<br>
+          3. Select "Save to Photos"
+        </p>
+      </div>
+      
+      <p class="text-[10px] text-gray-500 mt-2 text-center">
+        File: <span id="fileName" class="text-gray-300">video.webm</span><br>
+        Size: <span id="fileSize" class="text-gray-300">-- MB</span>
+      </p>
+    </div>
+    
+    <button onclick="cancelExport()" id="cancelBtn" class="w-full px-4 py-2 rounded-lg bg-red-500/20 text-red-400 text-xs hover:bg-red-500/30">Cancel Export</button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-4 right-4 glass px-4 py-3 rounded-xl shadow-2xl transform translate-y-20 opacity-0 transition-all duration-300 z-[200] flex items-center gap-2">
+  <span id="toastIcon">✅</span>
+  <span id="toastMessage" class="text-sm font-medium">Done</span>
+</div>
+
+<script>
+// State
+const AppState = {
+  clips: [],
+  currentClipIndex: -1,
+  isPlaying: false,
+  zoom: 1,
+  volume: 1,
+  isMuted: false,
+  selectedOverlay: null,
+  isMoveMode: false,
+  isExporting: false,
+  exportStartTime: 0,
+  exportTotalFrames: 0,
+  exportCurrentFrame: 0,
+  exportBlob: null,
+  exportFilename: '',
+  exportUrl: null
+};
+
+// File Upload
+function openUpload() {
+  document.getElementById('fileInput').click();
+}
+
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (files.length === 0) return;
+  
+  showToast('📁', `Importing ${files.length} files...`);
+  
+  for (const file of files) {
+    if (file.type.startsWith('video/') || file.type.startsWith('image/') || file.type.startsWith('audio/')) {
+      await addClip(file);
+    }
+  }
+  
+  if (AppState.clips.length > 0 && AppState.currentClipIndex === -1) {
+    selectClip(0);
+  }
+  updateStats();
+  updateUIState();
+});
+
+async function addClip(file) {
+  const clip = {
+    id: Date.now() + Math.random(),
+    file: file,
+    type: file.type.startsWith('video') ? 'video' : file.type.startsWith('audio') ? 'audio' : 'image',
+    name: file.name,
+    duration: 0,
+    trimStart: 0,
+    trimEnd: 0,
+    speed: 1,
+    volume: 1,
+    filters: [],
+    overlays: [],
+    rotation: 0,
+    position: { x: 0, y: 0 },
+    scale: 1
+  };
+  
+  try {
+    if (clip.type === 'video') {
+      clip.duration = await getMediaDuration(file, 'video');
+      clip.trimEnd = clip.duration;
+    } else if (clip.type === 'audio') {
+      clip.duration = await getMediaDuration(file, 'audio');
+      clip.trimEnd = clip.duration;
+    } else {
+      clip.duration = 5;
+      clip.trimEnd = 5;
+    }
+    
+    AppState.clips.push(clip);
+    updateTimeline();
+    return clip;
+  } catch (err) {
+    showToast('❌', `Failed: ${file.name}`);
+  }
+}
+
+function getMediaDuration(file, type) {
+  return new Promise((resolve) => {
+    const media = document.createElement(type);
+    media.preload = 'metadata';
+    media.src = URL.createObjectURL(file);
+    media.onloadedmetadata = () => {
+      URL.revokeObjectURL(media.src);
+      resolve(media.duration);
+    };
+    media.onerror = () => resolve(5);
+    setTimeout(() => resolve(5), 5000);
+  });
+}
+
+// Timeline
+function updateTimeline() {
+  const container = document.getElementById('timelineTracks');
+  container.innerHTML = '';
+  
+  const ruler = document.getElementById('timeRuler');
+  ruler.innerHTML = '';
+  const totalDuration = AppState.clips.reduce((acc, c) => acc + c.duration, 0) || 60;
+  const step = Math.max(1, Math.floor(totalDuration / 10));
+  
+  for (let i = 0; i <= totalDuration; i += step) {
+    const marker = document.createElement('div');
+    marker.className = 'absolute text-[10px] text-gray-500 transform -translate-x-1/2';
+    marker.style.left = `${(i / totalDuration) * 100}%`;
+    marker.textContent = formatTime(i);
+    ruler.appendChild(marker);
+  }
+  
+  const videoTrack = document.createElement('div');
+  videoTrack.className = 'flex gap-1 h-16 items-center min-w-full';
+  
+  AppState.clips.forEach((clip, index) => {
+    if (clip.type === 'audio') return;
+    
+    const div = document.createElement('div');
+    div.className = `clip-item h-full rounded-lg flex-shrink-0 flex flex-col justify-between p-1.5 ${index === AppState.currentClipIndex ? 'active' : ''}`;
+    div.style.width = `${Math.max(80, clip.duration * 25 * AppState.zoom)}px`;
+    div.onclick = () => selectClip(index);
+    
+    const thumb = document.createElement('div');
+    thumb.className = 'flex-1 bg-black/30 rounded flex items-center justify-center text-xl overflow-hidden relative';
+    
+    if (clip.type === 'video') {
+      const video = document.createElement('video');
+      video.src = URL.createObjectURL(clip.file);
+      video.className = 'w-full h-full object-cover opacity-60';
+      video.muted = true;
+      thumb.appendChild(video);
+    } else {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(clip.file);
+      img.className = 'w-full h-full object-cover opacity-80';
+      thumb.appendChild(img);
+    }
+    
+    const label = document.createElement('div');
+    label.className = 'text-[10px] truncate mt-0.5 font-medium';
+    label.textContent = clip.name;
+    
+    const badge = document.createElement('div');
+    badge.className = 'absolute top-1 right-1 bg-black/70 px-1 rounded text-[9px]';
+    badge.textContent = formatTime(clip.duration);
+    
+    div.appendChild(thumb);
+    div.appendChild(label);
+    thumb.appendChild(badge);
+    videoTrack.appendChild(div);
+  });
+  
+  container.appendChild(videoTrack);
+}
+
+function selectClip(index) {
+  AppState.currentClipIndex = index;
+  const clip = AppState.clips[index];
+  if (!clip) return;
+  
+  updateTimeline();
+  loadClipToPlayer(clip);
+  updateProperties(clip);
+  updateToolbar(clip);
+  
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('previewContainer').classList.remove('hidden');
+  document.getElementById('toolbarPanel').classList.remove('hidden');
+  document.getElementById('playPauseBtn').disabled = false;
+}
+
+function loadClipToPlayer(clip) {
+  const video = document.getElementById('previewVideo');
+  const canvas = document.getElementById('previewCanvas');
+  const overlays = document.getElementById('overlaysLayer');
+  
+  video.pause();
+  video.src = '';
+  overlays.innerHTML = '';
+  AppState.selectedOverlay = null;
+  
+  video.style.transform = `translate(${clip.position?.x || 0}px, ${clip.position?.y || 0}px) scale(${clip.scale || 1}) rotate(${clip.rotation || 0}deg)`;
+  
+  if (clip.type === 'video') {
+    video.classList.remove('hidden');
+    canvas.classList.add('hidden');
+    video.src = URL.createObjectURL(clip.file);
+    video.currentTime = clip.trimStart;
+    video.playbackRate = clip.speed;
+    video.volume = AppState.isMuted ? 0 : AppState.volume;
+    
+    video.onloadedmetadata = () => {
+      video.currentTime = clip.trimStart;
+      updateTimeDisplay();
+    };
+    
+    video.ontimeupdate = () => {
+      if (video.currentTime >= clip.trimEnd) {
+        video.pause();
+        video.currentTime = clip.trimStart;
+        AppState.isPlaying = false;
+        updatePlayButton();
+      }
+      updateTimeDisplay();
+      updatePlayhead();
+    };
+  } else if (clip.type === 'image') {
+    video.classList.add('hidden');
+    canvas.classList.remove('hidden');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(canvas.width/2, canvas.height/2);
+      ctx.rotate((clip.rotation * Math.PI) / 180);
+      ctx.scale(clip.scale || 1, clip.scale || 1);
+      ctx.drawImage(img, -img.width/2, -img.height/2);
+      ctx.restore();
+    };
+    img.src = URL.createObjectURL(clip.file);
+  }
+  
+  clip.overlays?.forEach(overlay => {
+    overlays.appendChild(createOverlayElement(overlay));
+  });
+  
+  setupMoveMode();
+}
+
+function setupMoveMode() {
+  const video = document.getElementById('previewVideo');
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!clip) return;
+  
+  let isDragging = false;
+  let startX, startY, initialX, initialY;
+  
+  video.onmousedown = (e) => {
+    if (!AppState.isMoveMode) return;
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    initialX = clip.position?.x || 0;
+    initialY = clip.position?.y || 0;
+    video.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+  
+  document.onmousemove = (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    clip.position = { x: initialX + dx, y: initialY + dy };
+    video.style.transform = `translate(${clip.position.x}px, ${clip.position.y}px) scale(${clip.scale || 1}) rotate(${clip.rotation || 0}deg)`;
+  };
+  
+  document.onmouseup = () => {
+    isDragging = false;
+    video.style.cursor = AppState.isMoveMode ? 'grab' : 'default';
+  };
+  
+  const container = document.getElementById('previewContainer');
+  container.onwheel = (e) => {
+    if (!AppState.isMoveMode) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    clip.scale = (clip.scale || 1) * delta;
+    clip.scale = Math.max(0.1, Math.min(5, clip.scale));
+    video.style.transform = `translate(${clip.position?.x || 0}px, ${clip.position?.y || 0}px) scale(${clip.scale}) rotate(${clip.rotation || 0}deg)`;
+    updateProperties(clip);
+  };
+}
+
+function createOverlayElement(overlay) {
+  const el = document.createElement('div');
+  el.className = `overlay-element ${overlay.type}-overlay ${AppState.selectedOverlay === overlay ? 'selected' : ''}`;
+  el.textContent = overlay.content;
+  el.style.left = overlay.x + '%';
+  el.style.top = overlay.y + '%';
+  el.style.transform = `translate(-50%, -50%) rotate(${overlay.rotation || 0}deg) scale(${overlay.scale || 1})`;
+  
+  let isDragging = false;
+  
+  el.onmousedown = (e) => {
+    e.stopPropagation();
+    isDragging = true;
+    AppState.selectedOverlay = overlay;
+    document.querySelectorAll('.overlay-element').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+  };
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging || AppState.selectedOverlay !== overlay) return;
+    const rect = document.getElementById('previewContainer').getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    overlay.x = Math.max(0, Math.min(100, x));
+    overlay.y = Math.max(0, Math.min(100, y));
+    el.style.left = overlay.x + '%';
+    el.style.top = overlay.y + '%';
+  });
+  
+  document.addEventListener('mouseup', () => isDragging = false);
+  
+  el.onwheel = (e) => {
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    overlay.scale = (overlay.scale || 1) * delta;
+    overlay.scale = Math.max(0.1, Math.min(5, overlay.scale));
+    el.style.transform = `translate(-50%, -50%) rotate(${overlay.rotation || 0}deg) scale(${overlay.scale})`;
+  };
+  
+  el.ondblclick = () => {
+    const clip = AppState.clips[AppState.currentClipIndex];
+    clip.overlays = clip.overlays.filter(o => o !== overlay);
+    el.remove();
+    AppState.selectedOverlay = null;
+    updateProperties(clip);
+  };
+  
+  return el;
+}
+
+// Playback
+function togglePlay() {
+  const video = document.getElementById('previewVideo');
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!video || !clip || clip.type !== 'video') return;
+  
+  if (AppState.isPlaying) {
+    video.pause();
+    AppState.isPlaying = false;
+  } else {
+    if (video.currentTime >= clip.trimEnd) video.currentTime = clip.trimStart;
+    video.play().catch(e => showToast('❌', 'Playback failed'));
+    AppState.isPlaying = true;
+  }
+  updatePlayButton();
+}
+
+function updatePlayButton() {
+  const icon = AppState.isPlaying ? '⏸' : '▶';
+  document.getElementById('playPauseBtn').innerHTML = icon;
+  document.getElementById('bigPlayIcon').innerHTML = icon;
+}
+
+function stopVideo() {
+  const video = document.getElementById('previewVideo');
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!video || !clip) return;
+  video.pause();
+  video.currentTime = clip.trimStart;
+  AppState.isPlaying = false;
+  updatePlayButton();
+}
+
+function toggleMute() {
+  AppState.isMuted = !AppState.isMuted;
+  const video = document.getElementById('previewVideo');
+  if (video) video.muted = AppState.isMuted;
+  document.getElementById('muteBtn').textContent = AppState.isMuted ? '🔇' : '🔊';
+}
+
+function setVolume(val) {
+  AppState.volume = val;
+  const video = document.getElementById('previewVideo');
+  if (video) video.volume = val;
+}
+
+function updateTimeDisplay() {
+  const video = document.getElementById('previewVideo');
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!video || !clip) return;
+  document.getElementById('timeDisplay').textContent = 
+    `${formatTime(video.currentTime)} / ${formatTime(clip.trimEnd - clip.trimStart)}`;
+}
+
+function updatePlayhead() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!clip) return;
+  const video = document.getElementById('previewVideo');
+  const progress = (video.currentTime - clip.trimStart) / (clip.trimEnd - clip.trimStart);
+  const timelineWidth = document.getElementById('timelineTracks').offsetWidth;
+  document.getElementById('playhead').style.left = `${8 + (progress * timelineWidth)}px`;
+}
+
+function formatTime(seconds) {
+  if (!seconds || isNaN(seconds)) return '00:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function zoomTimeline(delta) {
+  AppState.zoom = Math.max(0.5, Math.min(3, AppState.zoom + delta));
+  document.getElementById('zoomLevel').textContent = `${Math.round(AppState.zoom * 100)}%`;
+  updateTimeline();
+}
+
+// Toolbar
+function updateToolbar(clip) {
+  const toolbar = document.getElementById('toolbarPanel');
+  const baseTools = `
+    <button onclick="showTrim()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs">✂️ Trim</button>
+    <button onclick="showSpeed()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs">⚡ Speed</button>
+    <button onclick="showFilters()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs">🎨 Filter</button>
+    <button onclick="addText()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs">📝 Text</button>
+    <button onclick="addSticker()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs">⭐ Sticker</button>
+    <button onclick="toggleMoveMode()" class="tool-btn px-3 py-2 rounded-lg ${AppState.isMoveMode ? 'bg-indigo-600' : 'bg-white/10'} text-xs">🖱️ Move</button>
+  `;
+  
+  if (clip.type === 'video') {
+    toolbar.innerHTML = baseTools + `
+      <button onclick="aiRemoveBackground()" class="tool-btn px-3 py-2 rounded-lg bg-purple-600/80 text-xs">🧠 AI BG</button>
+      <button onclick="aiEnhance()" class="tool-btn px-3 py-2 rounded-lg ai-gradient text-xs text-white">✨ Enhance</button>
+    `;
+  } else {
+    toolbar.innerHTML = baseTools + `
+      <button onclick="rotateClip()" class="tool-btn px-3 py-2 rounded-lg bg-white/10 text-xs">🔄 Rotate</button>
+      <button onclick="aiEnhance()" class="tool-btn px-3 py-2 rounded-lg ai-gradient text-xs text-white">✨ Enhance</button>
+    `;
+  }
+}
+
+function toggleMoveMode() {
+  AppState.isMoveMode = !AppState.isMoveMode;
+  const video = document.getElementById('previewVideo');
+  video.style.cursor = AppState.isMoveMode ? 'grab' : 'default';
+  updateToolbar(AppState.clips[AppState.currentClipIndex]);
+  showToast(AppState.isMoveMode ? '🖱️' : '✋', AppState.isMoveMode ? 'Move mode ON' : 'Move mode OFF');
+}
+
+// Tools
+function showTrim() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  createModal('Trim', `
+    <div class="space-y-4">
+      <div class="bg-black/30 p-3 rounded-lg">
+        <div class="flex justify-between text-xs text-gray-400 mb-2">
+          <span>Start: <span class="text-white">${clip.trimStart.toFixed(1)}s</span></span>
+          <span>End: <span class="text-white">${clip.trimEnd.toFixed(1)}s</span></span>
+        </div>
+        <input type="range" min="0" max="${clip.duration}" step="0.1" value="${clip.trimStart}" 
+               class="range-slider mb-2" oninput="updateTrimStart(this.value)">
+        <input type="range" min="0" max="${clip.duration}" step="0.1" value="${clip.trimEnd}" 
+               class="range-slider" oninput="updateTrimEnd(this.value)">
+      </div>
+      <button onclick="applyTrim()" class="w-full accent-gradient py-2 rounded-lg text-sm font-bold">Apply</button>
+    </div>
+  `);
+}
+
+function updateTrimStart(val) {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.trimStart = Math.min(parseFloat(val), clip.trimEnd - 0.1);
+  document.getElementById('previewVideo').currentTime = clip.trimStart;
+}
+
+function updateTrimEnd(val) {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.trimEnd = Math.max(parseFloat(val), clip.trimStart + 0.1);
+}
+
+function applyTrim() {
+  closeModal();
+  updateTimeline();
+  showToast('✂️', 'Trim applied');
+}
+
+function showSpeed() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  createModal('Speed', `
+    <div class="text-center mb-4">
+      <div class="text-3xl font-bold text-indigo-400"><span id="speedVal">${clip.speed}</span>x</div>
+    </div>
+    <input type="range" min="0.25" max="3" step="0.25" value="${clip.speed}" 
+           class="range-slider mb-4" oninput="updateSpeed(this.value)">
+    <button onclick="closeModal()" class="w-full accent-gradient py-2 rounded-lg text-sm font-bold">Done</button>
+  `);
+}
+
+function updateSpeed(val) {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.speed = parseFloat(val);
+  document.getElementById('previewVideo').playbackRate = clip.speed;
+  document.getElementById('speedVal').textContent = val;
+}
+
+function showFilters() {
+  createModal('Filters', `
+    <div class="grid grid-cols-3 gap-2">
+      ${['Original', 'Cinema', 'Vivid', 'B&W', 'Vintage', 'Cyber'].map(f => 
+        `<button onclick="applyFilter('${f === 'Original' ? '' : f.toLowerCase()}')" class="p-3 rounded-lg bg-white/5 hover:bg-white/10 text-xs">${f}</button>`
+      ).join('')}
+    </div>
+  `);
+}
+
+function applyFilter(filter) {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  const video = document.getElementById('previewVideo');
+  const filters = { '': '', 'cinema': 'contrast(1.1) saturate(1.2)', 'vivid': 'saturate(1.5)', 'b&w': 'grayscale(100%)', 'vintage': 'sepia(0.4)', 'cyber': 'hue-rotate(180deg) saturate(2)' };
+  clip.filters = [filters[filter]];
+  video.style.filter = filters[filter];
+  closeModal();
+}
+
+function addText() {
+  const text = prompt('Enter text:');
+  if (!text) return;
+  const clip = AppState.clips[AppState.currentClipIndex];
+  const overlay = { type: 'text', content: text, x: 50, y: 80, rotation: 0, scale: 1 };
+  clip.overlays.push(overlay);
+  document.getElementById('overlaysLayer').appendChild(createOverlayElement(overlay));
+  updateProperties(clip);
+}
+
+function addSticker() {
+  const stickers = ['⭐', '🔥', '❤️', '🎉', '✨', '😎', '🚀', '💯'];
+  const sticker = stickers[Math.floor(Math.random() * stickers.length)];
+  const clip = AppState.clips[AppState.currentClipIndex];
+  const overlay = { type: 'sticker', content: sticker, x: 50, y: 50, rotation: 0, scale: 1 };
+  clip.overlays.push(overlay);
+  document.getElementById('overlaysLayer').appendChild(createOverlayElement(overlay));
+  updateProperties(clip);
+}
+
+function rotateClip() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.rotation = (clip.rotation || 0) + 90;
+  loadClipToPlayer(clip);
+}
+
+// AI Features
+function showAIEdit() {
+  document.getElementById('aiEditModal').classList.remove('hidden');
+}
+
+function closeAIEdit() {
+  document.getElementById('aiEditModal').classList.add('hidden');
+}
+
+async function startAIEdit(style) {
+  closeAIEdit();
+  document.getElementById('aiProcessing').classList.add('active');
+  showToast('🤖', `AI ${style} editing...`);
+  
+  await new Promise(r => setTimeout(r, 1500));
+  
+  const clip = AppState.clips[AppState.currentClipIndex];
+  if (!clip) {
+    document.getElementById('aiProcessing').classList.remove('active');
+    return;
+  }
+  
+  const styles = {
+    cinematic: { filter: 'contrast(1.1) saturate(1.2)', speed: 0.9 },
+    vlog: { filter: 'saturate(1.2)', speed: 1.1 },
+    social: { filter: 'saturate(1.3)', speed: 1 },
+    professional: { filter: 'contrast(1.05)', speed: 1 }
+  };
+  
+  clip.filters = [styles[style].filter];
+  clip.speed = styles[style].speed;
+  
+  if (style === 'social') {
+    clip.overlays.push({ type: 'caption', content: 'FOLLOW FOR MORE', x: 50, y: 85, rotation: 0, scale: 1 });
+  }
+  
+  loadClipToPlayer(clip);
+  document.getElementById('aiProcessing').classList.remove('active');
+  showToast('✅', `AI ${style} complete!`);
+}
+
+async function aiRemoveBackground() {
+  showToast('🧠', 'Loading AI...');
+  try {
+    const net = await bodyPix.load();
+    const clip = AppState.clips[AppState.currentClipIndex];
+    const video = document.getElementById('previewVideo');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 360;
+    const ctx = canvas.getContext('2d');
+    
+    const container = document.getElementById('overlaysLayer');
+    container.appendChild(canvas);
+    canvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+    
+    function render() {
+      if (AppState.currentClipIndex === -1) return;
+      net.segmentPerson(video).then(seg => {
+        const mask = bodyPix.toMask(seg);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'source-in';
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(render);
+      });
+    }
+    render();
+    showToast('✅', 'BG removal active');
+  } catch (err) {
+    showToast('❌', 'AI failed');
+  }
+}
+
+function aiEnhance() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.filters = ['contrast(1.05) saturate(1.1) brightness(1.02)'];
+  document.getElementById('previewVideo').style.filter = clip.filters[0];
+  showToast('✨', 'Enhanced!');
+}
+
+// FIXED EXPORT WITH MULTIPLE SAVE OPTIONS
+async function startExport() {
+  if (AppState.clips.length === 0) {
+    showToast('⚠️', 'No clips to export');
+    return;
+  }
+  
+  const modal = document.getElementById('exportModal');
+  const downloadSection = document.getElementById('downloadSection');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const shareBtn = document.getElementById('shareBtn');
+  
+  // Reset UI
+  downloadSection.classList.add('hidden');
+  cancelBtn.classList.remove('hidden');
+  shareBtn.classList.add('hidden');
+  modal.classList.remove('hidden');
+  
+  // Reset video preview
+  const previewVideo = document.getElementById('finalVideoPreview');
+  previewVideo.style.display = 'none';
+  previewVideo.src = '';
+  
+  AppState.isExporting = true;
+  AppState.exportStartTime = Date.now();
+  AppState.exportBlob = null;
+  AppState.exportFilename = `ProCut_Export_${Date.now()}.webm`;
+  
+  try {
+    // Create canvas for recording
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Set resolution (1080p max)
+    canvas.width = 1920;
+    canvas.height = 1080;
+    
+    updateExportProgress(0, 'Setting up recorder...', 'Calculating...');
+    
+    // Get stream from canvas
+    const stream = canvas.captureStream(30);
+    
+    // Calculate total frames for progress tracking
+    let totalDuration = 0;
+    AppState.clips.forEach(c => {
+      if (c.type !== 'audio') {
+        totalDuration += (c.trimEnd - c.trimStart) * 1000 / c.speed;
+      }
+    });
+    AppState.exportTotalFrames = Math.ceil((totalDuration / 1000) * 30); // 30fps
+    AppState.exportCurrentFrame = 0;
+    
+    // Add audio if available
+    const audioElements = [];
+    for (const clip of AppState.clips) {
+      if (clip.type === 'video' || clip.type === 'audio') {
+        const media = document.createElement(clip.type);
+        media.src = URL.createObjectURL(clip.file);
+        media.muted = false;
+        media.volume = clip.volume;
+        await new Promise(r => media.onloadedmetadata = r);
+        const mediaStream = media.captureStream ? media.captureStream() : null;
+        if (mediaStream) {
+          mediaStream.getAudioTracks().forEach(track => {
+            stream.addTrack(track);
+          });
+        }
+        audioElements.push(media);
+      }
+    }
+    
+    // Setup MediaRecorder with good quality
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: 'video/webm;codecs=vp9,opus',
+      videoBitsPerSecond: 8000000 // 8 Mbps
+    });
+    
+    const chunks = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    
+    mediaRecorder.onstop = () => {
+      // Create blob
+      AppState.exportBlob = new Blob(chunks, { type: 'video/webm' });
+      AppState.exportUrl = URL.createObjectURL(AppState.exportBlob);
+      
+      // Calculate file size
+      const sizeMB = (AppState.exportBlob.size / (1024 * 1024)).toFixed(1);
+      document.getElementById('fileSize').textContent = sizeMB + ' MB';
+      document.getElementById('fileName').textContent = AppState.exportFilename;
+      
+      // Show video preview
+      previewVideo.src = AppState.exportUrl;
+      previewVideo.style.display = 'block';
+      
+      // Show download section
+      updateExportProgress(100, 'Export Complete!', 'Done');
+      document.getElementById('exportIcon').textContent = '✅';
+      document.getElementById('exportTitle').textContent = 'Ready to Save!';
+      
+      // Show share button if supported
+      if (navigator.share && navigator.canShare) {
+        shareBtn.classList.remove('hidden');
+      }
+      
+      // Show download UI
+      downloadSection.classList.remove('hidden');
+      cancelBtn.classList.add('hidden');
+      
+      showToast('✅', 'Export complete! Choose how to save');
+    };
+    
+    // Start recording
+    mediaRecorder.start(100); // Collect data every 100ms
+    
+    // Render each clip with live progress updates
+    let currentClipIndex = 0;
+    const totalClips = AppState.clips.filter(c => c.type !== 'audio').length;
+    
+    for (let i = 0; i < AppState.clips.length && AppState.isExporting; i++) {
+      const clip = AppState.clips[i];
+      if (clip.type === 'audio') continue; // Skip audio-only clips for video rendering
+      
+      currentClipIndex++;
+      const clipDuration = (clip.trimEnd - clip.trimStart) * 1000 / clip.speed;
+      const clipFrames = Math.ceil((clipDuration / 1000) * 30);
+      
+      if (clip.type === 'video') {
+        await renderVideoClip(ctx, canvas, clip, clipDuration, currentClipIndex, totalClips, clipFrames);
+      } else if (clip.type === 'image') {
+        await renderImageClip(ctx, canvas, clip, clipDuration, currentClipIndex, totalClips, clipFrames);
+      }
+    }
+    
+    if (AppState.isExporting) {
+      mediaRecorder.stop();
+    }
+    
+  } catch (err) {
+    console.error('Export error:', err);
+    updateExportProgress(0, 'Export Failed', 'Error');
+    document.getElementById('exportTitle').textContent = 'Export Failed';
+    document.getElementById('exportIcon').textContent = '❌';
+    showToast('❌', 'Export failed: ' + err.message);
+    
+    // Show error in modal
+    document.getElementById('exportStatus').textContent = 'Error: ' + err.message;
+    cancelBtn.textContent = 'Close';
+    cancelBtn.classList.remove('hidden');
+  }
+}
+
+// Download video using traditional method
+function downloadVideo() {
+  if (!AppState.exportBlob) {
+    showToast('❌', 'No video to download');
+    return;
+  }
+  
+  try {
+    // Create fresh URL
+    const url = URL.createObjectURL(AppState.exportBlob);
+    
+    // Create temporary link element
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = AppState.exportFilename;
+    link.style.display = 'none';
+    
+    // Add to body and click
+    document.body.appendChild(link);
+    link.click();
+    
+    // Clean up
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 100);
+    
+    showToast('📥', 'Download started! Check Downloads folder');
+    
+  } catch (err) {
+    console.error('Download error:', err);
+    showToast('❌', 'Download failed. Try "Open in New Tab"');
+  }
+}
+
+// Share using Web Share API (best for mobile)
+async function shareVideo() {
+  if (!AppState.exportBlob) {
+    showToast('❌', 'No video to share');
+    return;
+  }
+  
+  try {
+    const file = new File([AppState.exportBlob], AppState.exportFilename, { type: 'video/webm' });
+    
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: 'My Pro Cut Studio Video',
+        text: 'Check out my edited video!'
+      });
+      showToast('✅', 'Shared successfully!');
+    } else {
+      showToast('⚠️', 'Sharing not supported on this device');
+    }
+  } catch (err) {
+    console.error('Share error:', err);
+    if (err.name !== 'AbortError') {
+      showToast('❌', 'Share failed: ' + err.message);
+    }
+  }
+}
+
+// Open video in new tab for manual save
+function openVideoInNewTab() {
+  if (!AppState.exportUrl) {
+    showToast('❌', 'No video available');
+    return;
+  }
+  
+  // Open in new tab
+  const newWindow = window.open(AppState.exportUrl, '_blank');
+  
+  if (!newWindow) {
+    showToast('⚠️', 'Popup blocked! Allow popups for this site');
+  } else {
+    showToast('🔗', 'Video opened in new tab. Long-press to save!');
+  }
+}
+
+function cancelExport() {
+  AppState.isExporting = false;
+  document.getElementById('exportModal').classList.add('hidden');
+  
+  // Clean up
+  if (AppState.exportUrl) {
+    URL.revokeObjectURL(AppState.exportUrl);
+    AppState.exportUrl = null;
+  }
+  AppState.exportBlob = null;
+  
+  showToast('⚠️', 'Export cancelled');
+}
+
+// Live progress update function
+function updateExportProgress(percent, status, timeRemaining) {
+  const progressBar = document.getElementById('exportProgress');
+  const percentText = document.getElementById('exportPercent');
+  const statusText = document.getElementById('exportStatus');
+  const timeText = document.getElementById('exportTimeRemaining');
+  
+  // Clamp percent between 0-100
+  percent = Math.max(0, Math.min(100, percent));
+  
+  progressBar.style.width = percent + '%';
+  percentText.textContent = Math.round(percent) + '%';
+  statusText.textContent = status;
+  
+  if (timeRemaining) {
+    timeText.textContent = timeRemaining;
+  }
+}
+
+// Calculate estimated time remaining based on progress
+function calculateTimeRemaining() {
+  const elapsed = Date.now() - AppState.exportStartTime;
+  const progress = AppState.exportCurrentFrame / AppState.exportTotalFrames;
+  
+  if (progress === 0) return 'Calculating...';
+  
+  const totalEstimated = elapsed / progress;
+  const remaining = totalEstimated - elapsed;
+  
+  if (remaining < 1000) return 'Less than a second';
+  if (remaining < 60000) return `${Math.ceil(remaining / 1000)}s remaining`;
+  return `${Math.ceil(remaining / 60000)}m ${Math.ceil((remaining % 60000) / 1000)}s remaining`;
+}
+
+async function renderVideoClip(ctx, canvas, clip, duration, clipIndex, totalClips, totalFrames) {
+  return new Promise(async (resolve) => {
+    const video = document.createElement('video');
+    video.src = URL.createObjectURL(clip.file);
+    video.currentTime = clip.trimStart;
+    video.playbackRate = clip.speed;
+    video.muted = false;
+    
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+    
+    const startTime = Date.now();
+    let frameCount = 0;
+    
+    function drawFrame() {
+      if (!AppState.isExporting || Date.now() - startTime >= duration) {
+        video.pause();
+        URL.revokeObjectURL(video.src);
+        resolve();
+        return;
+      }
+      
+      // Update global frame counter
+      AppState.exportCurrentFrame++;
+      frameCount++;
+      
+      // Calculate progress percentage
+      const totalProgress = (AppState.exportCurrentFrame / AppState.exportTotalFrames) * 100;
+      const timeRemaining = calculateTimeRemaining();
+      
+      // Update UI every 5 frames to avoid slowdown
+      if (frameCount % 5 === 0) {
+        updateExportProgress(
+          totalProgress,
+          `Rendering clip ${clipIndex}/${totalClips}...`,
+          timeRemaining
+        );
+        document.getElementById('exportDetails').textContent = 
+          `Clip ${clipIndex}/${totalClips} • Frame ${frameCount}/${totalFrames}`;
+      }
+      
+      // Clear and draw video with transforms
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      ctx.save();
+      
+      // Apply transforms
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      ctx.translate(centerX + (clip.position?.x || 0), centerY + (clip.position?.y || 0));
+      ctx.scale(clip.scale || 1, clip.scale || 1);
+      ctx.rotate((clip.rotation || 0) * Math.PI / 180);
+      
+      // Draw video centered
+      const scale = Math.min(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
+      const w = video.videoWidth * scale;
+      const h = video.videoHeight * scale;
+      ctx.drawImage(video, -w/2, -h/2, w, h);
+      
+      ctx.restore();
+      
+      // Draw overlays
+      clip.overlays?.forEach(overlay => {
+        ctx.save();
+        ctx.translate((overlay.x / 100) * canvas.width, (overlay.y / 100) * canvas.height);
+        ctx.rotate((overlay.rotation || 0) * Math.PI / 180);
+        ctx.scale(overlay.scale || 1, overlay.scale || 1);
+        
+        if (overlay.type === 'text' || overlay.type === 'caption') {
+          ctx.font = 'bold 48px Inter';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          if (overlay.type === 'caption') {
+            ctx.fillStyle = '#FFD700';
+            ctx.fillText(overlay.content, 0, 0);
+          } else {
+            ctx.fillStyle = '#fff';
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 4;
+            ctx.strokeText(overlay.content, 0, 0);
+            ctx.fillText(overlay.content, 0, 0);
+          }
+        } else if (overlay.type === 'sticker') {
+          ctx.font = '72px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(overlay.content, 0, 0);
+        }
+        
+        ctx.restore();
+      });
+      
+      requestAnimationFrame(drawFrame);
+    }
+    
+    drawFrame();
+  });
+}
+
+async function renderImageClip(ctx, canvas, clip, duration, clipIndex, totalClips, totalFrames) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = URL.createObjectURL(clip.file);
+    
+    img.onload = () => {
+      const startTime = Date.now();
+      let frameCount = 0;
+      
+      function drawFrame() {
+        if (!AppState.isExporting || Date.now() - startTime >= duration) {
+          URL.revokeObjectURL(img.src);
+          resolve();
+          return;
+        }
+        
+        // Update global frame counter
+        AppState.exportCurrentFrame++;
+        frameCount++;
+        
+        // Calculate progress percentage
+        const totalProgress = (AppState.exportCurrentFrame / AppState.exportTotalFrames) * 100;
+        const timeRemaining = calculateTimeRemaining();
+        
+        // Update UI every 5 frames
+        if (frameCount % 5 === 0) {
+          updateExportProgress(
+            totalProgress,
+            `Rendering clip ${clipIndex}/${totalClips}...`,
+            timeRemaining
+          );
+          document.getElementById('exportDetails').textContent = 
+            `Clip ${clipIndex}/${totalClips} • Frame ${frameCount}/${totalFrames}`;
+        }
+        
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.save();
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        ctx.translate(centerX + (clip.position?.x || 0), centerY + (clip.position?.y || 0));
+        ctx.scale(clip.scale || 1, clip.scale || 1);
+        ctx.rotate((clip.rotation || 0) * Math.PI / 180);
+        
+        const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, -w/2, -h/2, w, h);
+        
+        ctx.restore();
+        
+        // Draw overlays
+        clip.overlays?.forEach(overlay => {
+          ctx.save();
+          ctx.translate((overlay.x / 100) * canvas.width, (overlay.y / 100) * canvas.height);
+          ctx.rotate((overlay.rotation || 0) * Math.PI / 180);
+          ctx.scale(overlay.scale || 1, overlay.scale || 1);
+          
+          if (overlay.type === 'text' || overlay.type === 'caption') {
+            ctx.font = 'bold 48px Inter';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (overlay.type === 'caption') {
+              ctx.fillStyle = '#FFD700';
+              ctx.fillText(overlay.content, 0, 0);
+            } else {
+              ctx.fillStyle = '#fff';
+              ctx.strokeStyle = '#000';
+              ctx.lineWidth = 4;
+              ctx.strokeText(overlay.content, 0, 0);
+              ctx.fillText(overlay.content, 0, 0);
+            }
+          } else if (overlay.type === 'sticker') {
+            ctx.font = '72px serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(overlay.content, 0, 0);
+          }
+          
+          ctx.restore();
+        });
+        
+        requestAnimationFrame(drawFrame);
+      }
+      
+      drawFrame();
+    };
+  });
+}
+
+// Properties
+function updateProperties(clip) {
+  document.getElementById('propertiesContent').innerHTML = `
+    <div class="space-y-3">
+      <div class="flex items-center gap-2 pb-2 border-b border-white/5">
+        <div class="w-10 h-10 rounded bg-white/5 flex items-center justify-center text-lg">
+          ${clip.type === 'video' ? '🎬' : '🖼️'}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="font-medium text-xs truncate">${clip.name}</div>
+          <div class="text-[10px] text-gray-400">${formatTime(clip.duration)}</div>
+        </div>
+      </div>
+      
+      <div class="grid grid-cols-2 gap-2 text-[10px]">
+        <div class="bg-white/5 rounded p-2">
+          <div class="text-gray-500">Position</div>
+          <div class="font-mono">${Math.round(clip.position?.x || 0)}, ${Math.round(clip.position?.y || 0)}</div>
+        </div>
+        <div class="bg-white/5 rounded p-2">
+          <div class="text-gray-500">Scale</div>
+          <div class="font-mono">${(clip.scale || 1).toFixed(2)}x</div>
+        </div>
+        <div class="bg-white/5 rounded p-2">
+          <div class="text-gray-500">Rotation</div>
+          <div class="font-mono">${clip.rotation || 0}°</div>
+        </div>
+        <div class="bg-white/5 rounded p-2">
+          <div class="text-gray-500">Speed</div>
+          <div class="font-mono">${clip.speed}x</div>
+        </div>
+      </div>
+      
+      <div>
+        <div class="text-[10px] text-gray-500 mb-1">Overlays: ${clip.overlays?.length || 0}</div>
+        <div class="space-y-1 max-h-20 overflow-y-auto">
+          ${clip.overlays?.map((o, i) => `
+            <div class="flex justify-between bg-white/5 rounded px-2 py-1 text-[10px]">
+              <span class="truncate">${o.content.substring(0, 12)}</span>
+              <button onclick="removeOverlay(${i})" class="text-red-400">×</button>
+            </div>
+          `).join('') || '<div class="text-[10px] text-gray-500 italic">None</div>'}
+        </div>
+      </div>
+      
+      <div class="grid grid-cols-2 gap-1 pt-2 border-t border-white/5">
+        <button onclick="duplicateClip()" class="py-1.5 rounded bg-white/5 text-[10px]">Duplicate</button>
+        <button onclick="deleteClip()" class="py-1.5 rounded bg-red-500/20 text-red-400 text-[10px]">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function removeOverlay(index) {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.overlays.splice(index, 1);
+  loadClipToPlayer(clip);
+  updateProperties(clip);
+}
+
+function duplicateClip() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  const newClip = { ...clip, id: Date.now(), name: clip.name + ' (Copy)', overlays: [...clip.overlays] };
+  AppState.clips.splice(AppState.currentClipIndex + 1, 0, newClip);
+  updateTimeline();
+  updateStats();
+  showToast('📋', 'Duplicated');
+}
+
+function deleteClip() {
+  if (!confirm('Delete?')) return;
+  AppState.clips.splice(AppState.currentClipIndex, 1);
+  AppState.currentClipIndex = Math.min(AppState.currentClipIndex, AppState.clips.length - 1);
+  
+  if (AppState.clips.length === 0) {
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('previewContainer').classList.add('hidden');
+    document.getElementById('toolbarPanel').classList.add('hidden');
+    document.getElementById('playPauseBtn').disabled = true;
+    document.getElementById('exportBtn').disabled = true;
+    document.getElementById('propertiesContent').innerHTML = '<div class="text-center py-8 text-gray-500"><div class="text-3xl mb-2">📋</div><p class="text-xs">Select a clip</p></div>';
+  } else {
+    selectClip(AppState.currentClipIndex);
+  }
+  updateTimeline();
+  updateStats();
+}
+
+function resetClip() {
+  const clip = AppState.clips[AppState.currentClipIndex];
+  clip.trimStart = 0;
+  clip.trimEnd = clip.duration;
+  clip.speed = 1;
+  clip.position = { x: 0, y: 0 };
+  clip.scale = 1;
+  clip.rotation = 0;
+  clip.filters = [];
+  clip.overlays = [];
+  loadClipToPlayer(clip);
+  updateProperties(clip);
+  updateTimeline();
+  showToast('↺', 'Reset');
+}
+
+// UI Helpers
+function switchTab(tab) {
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.classList.remove('bg-white/10', 'text-white');
+    btn.classList.add('text-gray-300');
+  });
+  document.getElementById(`tab-${tab}`)?.classList.add('bg-white/10', 'text-white');
+  if (tab === 'move') toggleMoveMode();
+}
+
+function createModal(title, content) {
+  const modal = document.createElement('div');
+  modal.id = 'activeModal';
+  modal.className = 'fixed inset-0 modal-overlay z-[100] flex items-center justify-center p-4';
+  modal.innerHTML = `
+    <div class="glass rounded-2xl w-full max-w-md p-4">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-bold">${title}</h3>
+        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center">×</button>
+      </div>
+      ${content}
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function closeModal() {
+  const modal = document.getElementById('activeModal');
+  if (modal) modal.remove();
+}
+
+function showToast(icon, message) {
+  const toast = document.getElementById('toast');
+  document.getElementById('toastIcon').textContent = icon;
+  document.getElementById('toastMessage').textContent = message;
+  toast.classList.remove('translate-y-20', 'opacity-0');
+  setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+}
+
+function updateStats() {
+  const total = AppState.clips.reduce((acc, c) => acc + (c.trimEnd - c.trimStart), 0);
+  document.getElementById('stat-clips').textContent = AppState.clips.length;
+  document.getElementById('stat-duration').textContent = formatTime(total);
+}
+
+function updateUIState() {
+  document.getElementById('exportBtn').disabled = AppState.clips.length === 0;
+}
+
+function showTemplates() {
+  showToast('📋', 'Templates feature - import media to start');
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  switch(e.code) {
+    case 'Space':
+      e.preventDefault();
+      togglePlay();
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      const v = document.getElementById('previewVideo');
+      if (v) v.currentTime -= 5;
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      const vid = document.getElementById('previewVideo');
+      if (vid) vid.currentTime += 5;
+      break;
+    case 'KeyM':
+      toggleMoveMode();
+      break;
+  }
+});
+
+// Drag and drop
+const workspace = document.getElementById('workspace');
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(e => {
+  workspace.addEventListener(e, (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+});
+workspace.addEventListener('dragenter', () => workspace.style.background = 'rgba(102, 126, 234, 0.1)');
+workspace.addEventListener('dragleave', () => workspace.style.background = '');
+workspace.addEventListener('drop', (e) => {
+  workspace.style.background = '';
+  Array.from(e.dataTransfer.files).forEach(f => {
+    if (f.type.startsWith('video/') || f.type.startsWith('image/')) addClip(f);
+  });
+});
+</script>
+</body>
+</html>
